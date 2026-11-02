@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SVMS - live 3D viewer</title>
+<style>
+  html,body{margin:0;height:100%;background:#0F1012;color:#ECEAE6;font-family:system-ui,"Segoe UI",Roboto,sans-serif;overflow:hidden}
+  #hud{position:absolute;left:28px;top:24px;z-index:2;user-select:none}
+  .eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:#8E9199;font-weight:600}
+  #speed{font-size:76px;font-weight:700;letter-spacing:-2px;line-height:1.05;font-variant-numeric:tabular-nums}
+  #speed small{font-size:20px;color:#8E9199;font-weight:500;letter-spacing:0;margin-left:6px}
+  .row{display:flex;gap:28px;margin-top:14px}
+  .cell .l{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#8E9199;font-weight:700}
+  .cell .v{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:4px}
+  #status{display:inline-flex;align-items:center;gap:8px;margin-top:18px;font-size:12px;letter-spacing:.12em;text-transform:uppercase;font-weight:700;border:1px solid #2A2C31;border-radius:6px;padding:6px 10px}
+  #dot{width:7px;height:7px;border-radius:2px;background:#E2A03F}
+  #zero{position:absolute;right:28px;top:24px;z-index:2;background:#17181B;color:#ECEAE6;border:1px solid #2A2C31;border-radius:8px;padding:10px 16px;font-size:14px;font-weight:600;cursor:pointer}
+  #zero:hover{background:#1F2125}
+  #hint{position:absolute;right:28px;bottom:20px;font-size:12px;color:#5F6168;z-index:2}
+</style>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"}}</script>
+</head>
+<body>
+<div id="hud">
+  <div class="eyebrow">Vehicle attitude</div>
+  <div id="speed">0<small>km/h</small></div>
+  <div class="row">
+    <div class="cell"><div class="l">Pitch</div><div class="v" id="pitch">0.0&deg;</div></div>
+    <div class="cell"><div class="l">Roll</div><div class="v" id="roll">0.0&deg;</div></div>
+    <div class="cell"><div class="l">Yaw</div><div class="v" id="yaw">0.0&deg;</div></div>
+  </div>
+  <div id="status"><span id="dot"></span><span id="stext">Connecting</span></div>
+</div>
+<button id="zero">Set zero (Z)</button>
+<div id="hint">Blue face = front. Red / green / blue arrows = front / right / up.</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+import { getDatabase, ref, onValue } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
+
+// ====== PASTE THE SAME VALUES YOU USED IN src/config/firebase.config.ts ======
+const firebaseConfig = {
+  apiKey: 'PASTE_API_KEY',
+  authDomain: 'PASTE_PROJECT_ID.firebaseapp.com',
+  databaseURL: 'https://PASTE_PROJECT_ID-default-rtdb.asia-southeast1.firebasedatabase.app',
+  projectId: 'PASTE_PROJECT_ID',
+  appId: 'PASTE_APP_ID',
+};
+const PATH = 'telemetry/car1';
+// If the cube tilts the wrong way, change 1 to -1 here.
+const PITCH_SIGN = 1, ROLL_SIGN = 1, YAW_SIGN = 1;
+// ==============================================================================
+
+const rad = (d) => (d * Math.PI) / 180;
+const $ = (id) => document.getElementById(id);
+
+// ---- 3D scene (three.js: x = right, y = up, front of the cube = -z) ----
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.setClearColor(0x0f1012);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.1, 100);
+camera.position.set(4.6, 3.4, 6.2);
+camera.lookAt(0, 0, 0);
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.75));
+const sun = new THREE.DirectionalLight(0xffffff, 1.1);
+sun.position.set(3, 6, 4);
+scene.add(sun);
+
+const grid = new THREE.GridHelper(10, 20, 0x2a2c31, 0x1f2125);
+grid.position.y = -1.7;
+scene.add(grid);
+
+// BoxGeometry face order: +x, -x, +y, -y, +z, -z
+const colors = [0x6a7280, 0x6a7280, 0x8b93a1, 0x2a2f36, 0x9a3b36, 0x3c74b0];
+const cube = new THREE.Mesh(
+  new THREE.BoxGeometry(2, 2, 2),
+  colors.map((c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.6, metalness: 0.1 }))
+);
+cube.add(new THREE.LineSegments(new THREE.EdgesGeometry(cube.geometry), new THREE.LineBasicMaterial({ color: 0x0f1012 })));
+const arrow = (dir, color) => new THREE.ArrowHelper(dir, dir.clone().multiplyScalar(1), 1.2, color, 0.3, 0.18);
+cube.add(arrow(new THREE.Vector3(0, 0, -1), 0xe5534b)); // front
+cube.add(arrow(new THREE.Vector3(1, 0, 0), 0x4cb782));  // right
+cube.add(arrow(new THREE.Vector3(0, 1, 0), 0x5b9be0));  // up
+scene.add(cube);
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ---- live data from Firebase ----
+const raw = new THREE.Quaternion();
+const offset = new THREE.Quaternion();
+const target = new THREE.Quaternion();
+let lastSeen = 0, online = false;
+
+const db = getDatabase(initializeApp(firebaseConfig));
+onValue(ref(db, '.info/connected'), (s) => { online = s.val() === true; });
+onValue(ref(db, PATH), (snap) => {
+  const v = snap.val();
+  if (!v) return;
+  const pitch = +v.pitch || 0, roll = +v.roll || 0, yaw = +v.yaw || 0, speed = +v.speed || 0;
+  // yaw first, then pitch, then roll (same order as the phone app)
+  raw.setFromEuler(new THREE.Euler(rad(pitch) * PITCH_SIGN, -rad(yaw) * YAW_SIGN, -rad(roll) * ROLL_SIGN, 'YXZ'));
+  target.copy(offset).multiply(raw);
+  lastSeen = Date.now();
+  $('speed').firstChild.nodeValue = Math.round(speed);
+  $('pitch').textContent = pitch.toFixed(1) + '\u00b0';
+  $('roll').textContent = roll.toFixed(1) + '\u00b0';
+  $('yaw').textContent = yaw.toFixed(1) + '\u00b0';
+});
+
+function zero() { offset.copy(raw).invert(); target.copy(offset).multiply(raw); }
+$('zero').onclick = zero;
+addEventListener('keydown', (e) => { if (e.key.toLowerCase() === 'z') zero(); });
+
+// ---- animation loop ----
+function loop() {
+  cube.quaternion.slerp(target, 0.18); // eases between updates
+  const live = Date.now() - lastSeen < 3000;
+  $('dot').style.background = live ? '#4CB782' : online ? '#E2A03F' : '#E5534B';
+  $('stext').textContent = live ? 'Live' : online ? 'Waiting for ESP32' : 'Offline';
+  renderer.render(scene, camera);
+  requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>
