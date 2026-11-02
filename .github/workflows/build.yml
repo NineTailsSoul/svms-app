@@ -2,7 +2,7 @@ name: EAS Android Build
 on:
   push:
     branches:
-      - main # Change this if your default branch is different (e.g., master)
+      - main
 
 jobs:
   build:
@@ -14,7 +14,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 22
 
       - name: Setup Expo and EAS
         uses: expo/expo-github-action@v8
